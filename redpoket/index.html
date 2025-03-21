@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>抢红包雨 - 实时多人游戏</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background: linear-gradient(135deg, #ff4d4d, #ff9999);
+            font-family: 'Arial', sans-serif;
+            overflow: hidden;
+        }
+        #gameContainer {
+            position: relative;
+            width: 800px;
+            height: 600px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+        }
+        #gameCanvas {
+            width: 100%;
+            height: 100%;
+        }
+        #scoreboard {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 200px;
+            padding: 10px;
+            background: rgba(255, 215, 0, 0.9);
+            border-radius: 10px;
+            color: #8B0000;
+            font-size: 16px;
+            text-align: center;
+        }
+        #timer {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-size: 24px;
+            color: white;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 5px 10px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+        <div id="timer">剩余时间: 60s</div>
+        <div id="scoreboard">
+            <h3>排行榜</h3>
+            <div id="scores"></div>
+        </div>
+    </div>
+
+    <script>
+        // Canvas 初始化
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = 800;
+        canvas.height = 600;
+
+        // 游戏变量
+        let redPackets = [];
+        let score = 0;
+        let timeLeft = 60;
+        let players = {};
+        const playerId = Math.random().toString(36).substring(2, 9); // 随机生成玩家ID
+
+        // WebSocket 连接
+        const socket = new WebSocket('ws://localhost:8080'); // 替换为你的服务器地址
+        socket.onopen = () => {
+            console.log('Connected to server');
+            socket.send(JSON.stringify({ type: 'join', id: playerId, score: 0 }));
+        };
+        socket.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            if (data.type === 'update') {
+                players = data.players;
+                updateScoreboard();
+            }
+        };
+
+        // 红包类
+        class RedPacket {
+            constructor() {
+                this.x = Math.random() * (canvas.width - 50);
+                this.y = -50;
+                this.speed = Math.random() * 2 + 2;
+                this.size = 40;
+            }
+            draw() {
+                ctx.fillStyle = '#ff0000';
+                ctx.fillRect(this.x, this.y, this.size, this.size * 1.5);
+                ctx.fillStyle = '#ffd700';
+                ctx.font = '20px Arial';
+                ctx.fillText('福', this.x + 10, this.y + 30);
+            }
+            update() {
+                this.y += this.speed;
+                if (this.y > canvas.height) {
+                    redPackets.splice(redPackets.indexOf(this), 1);
+                }
+            }
+        }
+
+        // 添加红包
+        function spawnRedPacket() {
+            if (Math.random() < 0.05) {
+                redPackets.push(new RedPacket());
+            }
+        }
+
+        // 更新排行榜
+        function updateScoreboard() {
+            const scoresDiv = document.getElementById('scores');
+            scoresDiv.innerHTML = '';
+            Object.entries(players).forEach(([id, playerScore]) => {
+                scoresDiv.innerHTML += `<p>${id}: ${playerScore} 分</p>`;
+            });
+        }
+
+        // 点击检测
+        canvas.addEventListener('click', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+            redPackets.forEach((packet, index) => {
+                if (
+                    clickX >= packet.x && clickX <= packet.x + packet.size &&
+                    clickY >= packet.y && clickY <= packet.y + packet.size * 1.5
+                ) {
+                    score += 10;
+                    redPackets.splice(index, 1);
+                    socket.send(JSON.stringify({ type: 'score', id: playerId, score }));
+                }
+            });
+        });
+
+        // 游戏循环
+        function gameLoop() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            spawnRedPacket();
+            redPackets.forEach(packet => {
+                packet.update();
+                packet.draw();
+            });
+            requestAnimationFrame(gameLoop);
+        }
+
+        // 计时器
+        setInterval(() => {
+            if (timeLeft > 0) {
+                timeLeft--;
+                document.getElementById('timer').textContent = `剩余时间: ${timeLeft}s`;
+            } else {
+                alert(`游戏结束！你的分数: ${score}`);
+                socket.close();
+            }
+        }, 1000);
+
+        // 启动游戏
+        gameLoop();
+    </script>
+</body>
+</html>

@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>功夫大师对决 - 多人在线格斗</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background: linear-gradient(135deg, #2c3e50, #8e44ad);
+            font-family: 'Arial', sans-serif;
+            overflow: hidden;
+        }
+        #gameContainer {
+            position: relative;
+            width: 800px;
+            height: 400px 400px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+        }
+        #gameCanvas {
+            width: 100%;
+            height: 100%;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-size: 18px;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 5px 10px;
+            border-radius: 5px;
+        }
+        #playersList {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: white;
+            font-size: 16px;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 5px 10px;
+            border-radius: 5px;
+        }
+        #controls {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            font-size: 14px;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 5px 10px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+        <div id="info">时间: 60s | 你的血量: 100</div>
+        <div id="playersList">在线玩家: </div>
+        <div id="controls">移动: A/D | 跳跃: 空格 | 拳: J | 踢: K</div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = 800;
+        canvas.height = 400;
+
+        const playerId = Math.random().toString(36).substring(2, 9);
+        let players = {};
+        let timeLeft = 60;
+
+        // 玩家类（添加转身功能）
+        class Fighter {
+            constructor(id, x, color) {
+                this.id = id;
+                this.x = x;
+                this.y = canvas.height - 60;
+                this.width = 40;
+                this.height = 60;
+                this.speed = 5;
+                this.health = 100;
+                this.color = color;
+                this.isAttacking = false;
+                this.attackType = null;
+                this.velocityY = 0;
+                this.isJumping = false;
+                this.gravity = 0.5;
+                this.facing = 'right'; // 默认朝右
+            }
+            draw() {
+                ctx.fillStyle = this.color;
+                if (this.facing === 'right') {
+                    ctx.fillRect(this.x + 10, this.y, 20, 40); // 身体
+                    ctx.fillRect(this.x + 15, this.y - 10, 10, 10); // 头部
+                    ctx.fillStyle = '#000';
+                    ctx.fillRect(this.x, this.y + 20, 10, 20); // 左腿
+                    ctx.fillRect(this.x + 30, this.y + 20, 10, 20); // 右腿
+                    if (this.isAttacking) {
+                        ctx.fillStyle = 'red';
+                        if (this.attackType === 'punch') ctx.fillRect(this.x + this.width, this.y, 20, 10);
+                        else if (this.attackType === 'kick') ctx.fillRect(this.x + this.width, this.y + this.height - 10, 30, 10);
+                    }
+                } else {
+                    ctx.fillRect(this.x + 10, this.y, 20, 40); // 身体
+                    ctx.fillRect(this.x + 15, this.y - 10, 10, 10); // 头部
+                    ctx.fillStyle = '#000';
+                    ctx.fillRect(this.x + 30, this.y + 20, 10, 20); // 左腿（反转）
+                    ctx.fillRect(this.x, this.y + 20, 10, 20); // 右腿（反转）
+                    if (this.isAttacking) {
+                        ctx.fillStyle = 'red';
+                        if (this.attackType === 'punch') ctx.fillRect(this.x - 20, this.y, 20, 10);
+                        else if (this.attackType === 'kick') ctx.fillRect(this.x - 30, this.y + this.height - 10, 30, 10);
+                    }
+                }
+                ctx.fillStyle = 'white';
+                ctx.font = '12px Arial';
+                ctx.fillText(this.health, this.x + 10, this.y - 15);
+            }
+            move(direction) {
+                if (direction === 'left' && this.x > 0) {
+                    this.x -= this.speed;
+                    this.facing = 'left';
+                }
+                if (direction === 'right' && this.x < canvas.width - this.width) {
+                    this.x += this.speed;
+                    this.facing = 'right';
+                }
+            }
+            jump() {
+                if (!this.isJumping) {
+                    this.velocityY = -12;
+                    this.isJumping = true;
+                }
+            }
+            update() {
+                this.y += this.velocityY;
+                this.velocityY += this.gravity;
+                if (this.y >= canvas.height - this.height) {
+                    this.y = canvas.height - this.height;
+                    this.velocityY = 0;
+                    this.isJumping = false;
+                }
+            }
+            attack(type) {
+                this.isAttacking = true;
+                this.attackType = type;
+                setTimeout(() => this.isAttacking = false, 200);
+            }
+        }
+
+        const localPlayer = new Fighter(playerId, 100, '#e74c3c');
+
+        // WebSocket 连接
+        const socket = new WebSocket('ws://localhost:8080');
+        socket.onopen = () => {
+            socket.send(JSON.stringify({ type: 'join', id: playerId, x: localPlayer.x, y: localPlayer.y, health: localPlayer.health, facing: localPlayer.facing }));
+        };
+        socket.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            if (data.type === 'update') {
+                players = data.players;
+                updatePlayersList();
+            }
+        };
+
+        // 键盘控制
+        document.addEventListener('keydown', (e) => {
+            switch (e.key) {
+                case 'a': case 'A': localPlayer.move('left'); break;
+                case 'd': case 'D': localPlayer.move('right'); break;
+                case ' ': localPlayer.jump(); break;
+                case 'j': case 'J': localPlayer.attack('punch'); break;
+                case 'k': case 'K': localPlayer.attack('kick'); break;
+            }
+            socket.send(JSON.stringify({ type: 'move', id: playerId, x: localPlayer.x, y: localPlayer.y, health: localPlayer.health, facing: localPlayer.facing }));
+        });
+
+        // 触屏控制
+        let touchStartX = 0;
+        let touchTime = 0;
+        canvas.addEventListener('touchstart', (e) => {
+            touchStartX = e.touches[0].clientX;
+            touchTime = Date.now();
+        });
+        canvas.addEventListener('touchmove', (e) => {
+            const touchX = e.touches[0].clientX;
+            if (touchX < touchStartX - 20) localPlayer.move('left');
+            if (touchX > touchStartX + 20) localPlayer.move('right');
+            socket.send(JSON.stringify({ type: 'move', id: playerId, x: localPlayer.x, y: localPlayer.y, health: localPlayer.health, facing: localPlayer.facing }));
+        });
+        canvas.addEventListener('touchend', (e) => {
+            const touchX = e.changedTouches[0].clientX;
+            if (Date.now() - touchTime < 200) {
+                localPlayer.jump();
+            } else if (touchX > canvas.width / 2) {
+                localPlayer.attack('kick');
+            } else {
+                localPlayer.attack('punch');
+            }
+        });
+
+        // 更新玩家列表
+        function updatePlayersList() {
+            const playersList = document.getElementById('playersList');
+            playersList.textContent = '在线玩家: ';
+            Object.keys(players).forEach(id => {
+                playersList.textContent += `${id} (${players[id].health}) `;
+            });
+        }
+
+        // 碰撞检测与伤害
+        function checkCollision() {
+            Object.keys(players).forEach(id => {
+                if (id !== playerId && players[id]) {
+                    const opponent = players[id];
+                    if (
+                        localPlayer.isAttacking &&
+                        Math.abs(localPlayer.x - opponent.x) < 50 &&
+                        Math.abs(localPlayer.y - opponent.y) < 60 &&
+                        opponent.health > 0
+                    ) {
+                        opponent.health -= localPlayer.attackType === 'punch' ? 10 : 15;
+                        socket.send(JSON.stringify({ type: 'hit', id: id, health: opponent.health }));
+                    }
+                }
+            });
+        }
+
+        // 游戏循环
+        function gameLoop() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            localPlayer.update();
+            localPlayer.draw();
+            Object.keys(players).forEach(id => {
+                if (id !== playerId && players[id]) {
+                    const p = new Fighter(id, players[id].x, '#3498db');
+                    p.y = players[id].y;
+                    p.health = players[id].health;
+                    p.facing = players[id].facing;
+                    p.draw();
+                }
+            });
+            checkCollision();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // 计时器
+        setInterval(() => {
+            if (timeLeft > 0) {
+                timeLeft--;
+                document.getElementById('info').textContent = `时间: ${timeLeft}s | 你的血量: ${localPlayer.health}`;
+            } else {
+                alert(`游戏结束！你的血量: ${localPlayer.health}`);
+                socket.close();
+            }
+        }, 1000);
+
+        gameLoop();
+    </script>
+</body>
+</html>
