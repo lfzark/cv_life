@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>3D人体经络与穴位 - FBX模型</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #1a1a2e;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            font-family: Arial, sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">使用鼠标控制视角：左键旋转，右键平移，滚轮缩放</div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+    <script src="https://unpkg.com/three@0.134.0/examples/js/libs/fflate.min.js"></script>
+    <script src="https://unpkg.com/three@0.134.0/examples/js/loaders/FBXLoader.js"></script>
+    <script src="https://unpkg.com/three@0.134.0/examples/js/controls/OrbitControls.js"></script>
+    <script>
+        let scene, camera, renderer, controls, humanModel;
+        const clock = new THREE.Clock();
+
+        // 初始化场景
+        function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            camera.position.set(0, 2, 5);
+            camera.lookAt(0, 1, 0);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+
+            const ambientLight = new THREE.AmbientLight(0x404040, 1);
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+            directionalLight.position.set(5, 10, 7.5);
+            scene.add(directionalLight);
+
+            loadHumanModel();
+            animate();
+        }
+
+        // 加载FBX人体模型
+        function loadHumanModel() {
+            const loader = new THREE.FBXLoader();
+            loader.load('human.fbx', (fbx) => {
+                humanModel = fbx;
+                humanModel.scale.set(0.01, 0.01, 0.01); // 调整缩放
+                humanModel.position.set(0, 0, 0);
+                scene.add(humanModel);
+
+                // 计算模型边界框
+                const box = new THREE.Box3().setFromObject(humanModel);
+                console.log('模型边界框:', box);
+                const height = box.max.y - box.min.y;
+                const width = box.max.x - box.min.x;
+                const depth = box.max.z - box.min.z;
+                console.log('模型尺寸 - 宽度:', width, '高度:', height, '深度:', depth);
+
+                createAcupoints(height, width, depth);
+                createMeridians(height, width, depth);
+            }, undefined, (error) => {
+                console.error('模型加载失败:', error);
+            });
+        }
+
+        // 创建361个穴位（根据模型尺寸调整）
+        function createAcupoints(height, width, depth) {
+            const acupointMaterial = new THREE.SpriteMaterial({
+                color: 0xffff00,
+                map: createGlowTexture(),
+                transparent: true,
+                blending: THREE.AdditiveBlending
+            });
+
+            for (let i = 0; i < 361; i++) {
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.acos(2 * Math.random() - 1);
+                const radius = width / 2 + 0.01; // 略大于模型宽度
+                const x = radius * Math.sin(phi) * Math.cos(theta);
+                const y = (height / 2) * (2 * Math.random() - 1); // 在模型高度范围内
+                const z = radius * Math.sin(phi) * Math.sin(theta);
+
+                const sprite = new THREE.Sprite(acupointMaterial);
+                sprite.position.set(x, y, z);
+                sprite.scale.set(0.05, 0.05, 0.05);
+                humanModel.add(sprite); // 添加到模型上
+            }
+        }
+
+        // 创建发光纹理
+        function createGlowTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64;
+            canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+            gradient.addColorStop(0, 'white');
+            gradient.addColorStop(1, 'transparent');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, 64, 64);
+            const texture = new THREE.Texture(canvas);
+            texture.needsUpdate = true;
+            return texture;
+        }
+
+        // 创建12条经络（根据模型尺寸调整）
+        function createMeridians(height, width, depth) {
+            const meridianColors = [
+                0xff0000, 0x00ff00, 0x0000ff, 0xffff00, 0xff00ff, 0x00ffff,
+                0xff8000, 0x8000ff, 0x0080ff, 0xff0080, 0x80ff00, 0x00ff80
+            ];
+
+            for (let i = 0; i < 12; i++) {
+                const points = [];
+                const segments = 20;
+                for (let j = 0; j <= segments; j++) {
+                    const t = j / segments;
+                    const x = (width / 2) * Math.cos(i * Math.PI / 6 + t * Math.PI * 2) * (1 - t);
+                    const y = t * height - height / 2; // 从底部到顶部
+                    const z = (depth / 2) * Math.sin(i * Math.PI / 6 + t * Math.PI * 2) * (1 - t);
+                    points.push(new THREE.Vector3(x, y, z));
+                }
+
+                const geometry = new THREE.TubeGeometry(
+                    new THREE.CatmullRomCurve3(points), segments, 0.02, 8, false
+                );
+                const material = new THREE.ShaderMaterial({
+                    uniforms: {
+                        time: { value: 0 },
+                        color: { value: new THREE.Color(meridianColors[i]) }
+                    },
+                    vertexShader: `
+                        varying vec2 vUv;
+                        void main() {
+                            vUv = uv;
+                            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                        }
+                    `,
+                    fragmentShader: `
+                        uniform float time;
+                        uniform vec3 color;
+                        varying vec2 vUv;
+                        void main() {
+                            float glow = sin(vUv.y * 10.0 + time * 5.0) * 0.5 + 0.5;
+                            gl_FragColor = vec4(color * glow, glow);
+                        }
+                    `,
+                    transparent: true,
+                    blending: THREE.AdditiveBlending
+                });
+
+                const meridian = new THREE.Mesh(geometry, material);
+                humanModel.add(meridian);
+            }
+        }
+
+        // 动画循环
+        function animate() {
+            requestAnimationFrame(animate);
+            const time = clock.getElapsedTime();
+
+            if (humanModel) {
+                humanModel.traverse((object) => {
+                    if (object.material && object.material.uniforms && object.material.uniforms.time) {
+                        object.material.uniforms.time.value = time;
+                    }
+                });
+            }
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // 自适应窗口大小
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        init();
+    </script>
+</body>
+</html>

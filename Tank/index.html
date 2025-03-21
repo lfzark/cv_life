@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>坦克大战 - 多人在线游戏</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background: linear-gradient(135deg, #2c3e50, #34495e);
+            font-family: 'Arial', sans-serif;
+            overflow: hidden;
+        }
+        #gameContainer {
+            position: relative;
+            width: 800px;
+            height: 600px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+        }
+        #gameCanvas {
+            width: 100%;
+            height: 100%;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-size: 18px;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 5px 10px;
+            border-radius: 5px;
+        }
+        #playersList {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: white;
+            font-size: 16px;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 5px 10px;
+            border-radius: 5px;
+        }
+        #controls {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            font-size: 14px;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 5px 10px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+        <div id="info">时间: 60s | 分数: 0 | 生命: 3</div>
+        <div id="playersList">玩家列表: </div>
+        <div id="controls">移动: W/A/S/D | 射击: 空格</div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = 800;
+        canvas.height = 600;
+
+        const playerId = Math.random().toString(36).substring(2, 9);
+        let players = {};
+        let bullets = [];
+        let timeLeft = 60;
+        const maxPlayers = 8;
+        const defaultPlayers = 2;
+
+        // 坦克类
+        class Tank {
+            constructor(id, x, y, isAI = false) {
+                this.id = id;
+                this.x = x;
+                this.y = y;
+                this.angle = 0;
+                this.speed = 3;
+                this.color = isAI ? `#${Math.floor(Math.random()*16777215).toString(16)}` : '#e74c3c';
+                this.isAI = isAI;
+                this.health = 3;
+                this.score = 0;
+                this.lastShot = 0;
+            }
+            draw() {
+                if (this.health <= 0) return;
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.angle);
+                ctx.fillStyle = this.color;
+                ctx.fillRect(-20, -15, 40, 30); // 坦克主体
+                ctx.fillStyle = '#555';
+                ctx.fillRect(0, -5, 30, 10); // 炮管
+                ctx.restore();
+                ctx.fillStyle = 'white';
+                ctx.font = '12px Arial';
+                ctx.fillText(`${this.score}/${this.health}`, this.x - 10, this.y - 25);
+            }
+            update() {
+                if (this.isAI && this.health > 0) {
+                    this.aiLogic();
+                }
+            }
+            aiLogic() {
+                if (Math.random() < 0.02) {
+                    const target = Object.values(players).find(p => p.id !== this.id && p.health > 0);
+                    if (target) {
+                        const dx = target.x - this.x;
+                        const dy = target.y - this.y;
+                        this.angle = Math.atan2(dy, dx);
+                        this.x += Math.cos(this.angle) * this.speed;
+                        this.y += Math.sin(this.angle) * this.speed;
+                    }
+                }
+                if (Date.now() - this.lastShot > 1000 && Math.random() < 0.05) {
+                    this.shoot();
+                }
+            }
+            shoot() {
+                if (Date.now() - this.lastShot > 500) {
+                    bullets.push(new Bullet(this.id, this.x, this.y, this.angle));
+                    this.lastShot = Date.now();
+                    socket.send(JSON.stringify({ type: 'shoot', id: this.id, x: this.x, y: this.y, angle: this.angle }));
+                }
+            }
+        }
+
+        // 炮弹类
+        class Bullet {
+            constructor(id, x, y, angle) {
+                this.id = id;
+                this.x = x;
+                this.y = y;
+                this.angle = angle;
+                this.speed = 7;
+            }
+            draw() {
+                ctx.fillStyle = 'yellow';
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, 5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            update() {
+                this.x += Math.cos(this.angle) * this.speed;
+                this.y += Math.sin(this.angle) * this.speed;
+                if (this.x < 0 || this.x > canvas.width || this.y < 0 || this.y > canvas.height) {
+                    bullets.splice(bullets.indexOf(this), 1);
+                }
+            }
+        }
+
+        // 初始化玩家
+        let localPlayer = null;
+        function initializePlayers() {
+            if (!players[playerId] && !localPlayer) {
+                localPlayer = new Tank(playerId, canvas.width / 2, canvas.height / 2);
+                players[playerId] = localPlayer;
+            }
+            const humanCount = Object.keys(players).filter(id => !players[id].isAI).length;
+            if (humanCount < defaultPlayers) {
+                for (let i = humanCount; i < defaultPlayers; i++) {
+                    const aiId = `AI_${i}`;
+                    if (!players[aiId]) {
+                        players[aiId] = new Tank(aiId, Math.random() * canvas.width, Math.random() * canvas.height, true);
+                    }
+                }
+            }
+        }
+
+        // WebSocket 连接
+        const socket = new WebSocket('ws://localhost:8080');
+        socket.onopen = () => {
+            socket.send(JSON.stringify({ type: 'join', id: playerId }));
+        };
+        socket.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            if (data.type === 'update') {
+                const newPlayers = {};
+                Object.keys(data.players).forEach(id => {
+                    const p = data.players[id];
+                    newPlayers[id] = new Tank(id, p.x, p.y, p.isAI);
+                    newPlayers[id].angle = p.angle;
+                    newPlayers[id].health = p.health;
+                    newPlayers[id].score = p.score;
+                });
+                players = newPlayers;
+                initializePlayers();
+                updatePlayersList();
+            } else if (data.type === 'shoot') {
+                bullets.push(new Bullet(data.id, data.x, data.y, data.angle));
+            } else if (data.type === 'hit') {
+                if (players[data.targetId]) {
+                    players[data.targetId].health--;
+                    if (players[data.shooterId]) players[data.shooterId].score++;
+                }
+            }
+        };
+
+        // 键盘控制
+        document.addEventListener('keydown', (e) => {
+            if (localPlayer && localPlayer.health > 0) {
+                switch (e.key) {
+                    case 'w': case 'W': 
+                        localPlayer.x += Math.cos(localPlayer.angle) * localPlayer.speed; 
+                        localPlayer.y += Math.sin(localPlayer.angle) * localPlayer.speed; 
+                        break;
+                    case 's': case 'S': 
+                        localPlayer.x -= Math.cos(localPlayer.angle) * localPlayer.speed; 
+                        localPlayer.y -= Math.sin(localPlayer.angle) * localPlayer.speed; 
+                        break;
+                    case 'a': case 'A': localPlayer.angle -= 0.1; break;
+                    case 'd': case 'D': localPlayer.angle += 0.1; break;
+                    case ' ': localPlayer.shoot(); break;
+                }
+                localPlayer.x = Math.max(20, Math.min(canvas.width - 20, localPlayer.x));
+                localPlayer.y = Math.max(15, Math.min(canvas.height - 15, localPlayer.y));
+                socket.send(JSON.stringify({ 
+                    type: 'move', 
+                    id: playerId, 
+                    x: localPlayer.x, 
+                    y: localPlayer.y, 
+                    angle: localPlayer.angle, 
+                    health: localPlayer.health, 
+                    score: localPlayer.score 
+                }));
+            }
+        });
+
+        // 触屏控制（简单实现）
+        let touchStartX = 0, touchStartY = 0;
+        canvas.addEventListener('touchstart', (e) => {
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+        });
+        canvas.addEventListener('touchmove', (e) => {
+            if (localPlayer && localPlayer.health > 0) {
+                const touchX = e.touches[0].clientX;
+                const touchY = e.touches[0].clientY;
+                const dx = touchX - touchStartX;
+                const dy = touchY - touchStartY;
+                localPlayer.angle = Math.atan2(dy, dx);
+                localPlayer.x += Math.cos(localPlayer.angle) * localPlayer.speed;
+                localPlayer.y += Math.sin(localPlayer.angle) * localPlayer.speed;
+                localPlayer.x = Math.max(20, Math.min(canvas.width - 20, localPlayer.x));
+                localPlayer.y = Math.max(15, Math.min(canvas.height - 15, localPlayer.y));
+                socket.send(JSON.stringify({ 
+                    type: 'move', 
+                    id: playerId, 
+                    x: localPlayer.x, 
+                    y: localPlayer.y, 
+                    angle: localPlayer.angle, 
+                    health: localPlayer.health, 
+                    score: localPlayer.score 
+                }));
+                touchStartX = touchX;
+                touchStartY = touchY;
+            }
+        });
+        canvas.addEventListener('touchend', () => {
+            if (localPlayer && localPlayer.health > 0) localPlayer.shoot();
+        });
+
+        // 更新玩家列表
+        function updatePlayersList() {
+            const playersList = document.getElementById('playersList');
+            playersList.textContent = `玩家列表: ${Object.keys(players).length}/${maxPlayers}`;
+        }
+
+        // 检查碰撞
+        function checkCollisions() {
+            bullets.forEach((bullet, bIndex) => {
+                Object.keys(players).forEach(id => {
+                    if (players[id].id !== bullet.id && players[id].health > 0) {
+                        const dx = bullet.x - players[id].x;
+                        const dy = bullet.y - players[id].y;
+                        if (Math.sqrt(dx * dx + dy * dy) < 25) {
+                            socket.send(JSON.stringify({ type: 'hit', shooterId: bullet.id, targetId: id }));
+                            bullets.splice(bIndex, 1);
+                        }
+                    }
+                });
+            });
+        }
+
+        // 游戏循环
+        function gameLoop() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            Object.values(players).forEach(p => {
+                p.update();
+                p Footdraw();
+            });
+
+            bullets.forEach(b => {
+                b.update();
+                b.draw();
+            });
+
+            checkCollisions();
+            if (localPlayer) {
+                document.getElementById('info').textContent = `时间: ${timeLeft}s | 分数: ${localPlayer.score} | 生命: ${localPlayer.health}`;
+            }
+            requestAnimationFrame(gameLoop);
+        }
+
+        // 计时器
+        setInterval(() => {
+            if (timeLeft > 0) {
+                timeLeft--;
+            } else {
+                const winner = Object.values(players).reduce((prev, curr) => curr.score > prev.score ? curr : prev, { score: -1 });
+                alert(`游戏结束！胜者: ${winner.id} 得分: ${winner.score}`);
+                socket.close();
+            }
+        }, 1000);
+
+        gameLoop();
+    </script>
+</body>
+</html>

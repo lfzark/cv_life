@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>多人在线跳跃挑战</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: linear-gradient(135deg, #74ebd5, #acb6e5);
+            font-family: Arial, sans-serif;
+        }
+
+        .game-container {
+            width: 800px;
+            height: 500px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
+            position: relative;
+            overflow: hidden;
+            backdrop-filter: blur(10px);
+        }
+
+        .game-area {
+            width: 100%;
+            height: 350px;
+            position: relative;
+        }
+
+        .player {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            position: absolute;
+            bottom: 0;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .target {
+            width: 10px;
+            height: 50px;
+            background: #4ecdc4;
+            position: absolute;
+            bottom: 0;
+            border-radius: 5px;
+        }
+
+        .power-bar {
+            width: 100px;
+            height: 10px;
+            background: #eee;
+            border-radius: 5px;
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+        }
+
+        .power-level {
+            height: 100%;
+            background: #45b7d1;
+            border-radius: 5px;
+            width: 0;
+            transition: width 0.1s linear;
+        }
+
+        .scoreboard {
+            padding: 20px;
+            color: white;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 0 0 20px 20px;
+        }
+
+        .player-list, .leaderboard {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .leaderboard {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 10px;
+            border-radius: 10px;
+        }
+
+        .nickname-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal-content {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="nickname-modal" id="nicknameModal">
+        <div class="modal-content">
+            <h2>请输入昵称</h2>
+            <input type="text" id="nicknameInput" maxlength="10" placeholder="你的昵称">
+            <br><br>
+            <button onclick="joinGame()">加入游戏</button>
+        </div>
+    </div>
+
+    <div class="game-container" style="display: none;" id="gameContainer">
+        <div class="game-area" id="gameArea">
+            <div class="target" id="target"></div>
+            <div class="power-bar">
+                <div class="power-level" id="powerLevel"></div>
+            </div>
+        </div>
+        <div class="scoreboard">
+            <div class="player-list" id="playerList"></div>
+        </div>
+        <div class="leaderboard" id="leaderboard"></div>
+    </div>
+
+    <script>
+        const gameContainer = document.getElementById('gameContainer');
+        const gameArea = document.getElementById('gameArea');
+        const target = document.getElementById('target');
+        const powerLevel = document.getElementById('powerLevel');
+        const playerList = document.getElementById('playerList');
+        const leaderboard = document.getElementById('leaderboard');
+        const nicknameModal = document.getElementById('nicknameModal');
+        const nicknameInput = document.getElementById('nicknameInput');
+
+        const socket = new WebSocket('ws://localhost:8080');
+        let myId = null;
+        let players = {};
+        let power = 0;
+        let isCharging = false;
+
+        socket.onopen = () => {
+            console.log('Connected to server');
+        };
+
+        socket.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            switch (data.type) {
+                case 'init':
+                    myId = data.id;
+                    break;
+                case 'update':
+                    updateGameState(data.players, data.target);
+                    updateLeaderboard(data.players);
+                    break;
+            }
+        };
+
+        function joinGame() {
+            const nickname = nicknameInput.value.trim();
+            if (nickname) {
+                socket.send(JSON.stringify({ type: 'join', nickname }));
+                nicknameModal.style.display = 'none';
+                gameContainer.style.display = 'block';
+            } else {
+                alert('请输入昵称！');
+            }
+        }
+
+        function createPlayer(id) {
+            if (!document.getElementById(`player-${id}`)) {
+                const player = document.createElement('div');
+                player.id = `player-${id}`;
+                player.className = 'player';
+                player.style.background = `hsl(${Object.keys(players).length * 60}, 70%, 50%)`;
+                gameArea.appendChild(player);
+
+                if (id === myId) {
+                    player.addEventListener('mousedown', startCharging);
+                    document.addEventListener('mouseup', () => releaseJump(id));
+                }
+            }
+        }
+
+        function updateGameState(serverPlayers, targetPos) {
+            players = serverPlayers;
+            target.style.left = `${targetPos}px`;
+
+            for (const id in players) {
+                createPlayer(id);
+                const player = document.getElementById(`player-${id}`);
+                player.style.left = `${players[id].position}px`;
+                
+                const scoreSpan = document.getElementById(`score-${id}`);
+                if (!scoreSpan) {
+                    const div = document.createElement('div');
+                    div.innerHTML = `${players[id].nickname}: <span id="score-${id}">${players[id].score}</span>分`;
+                    playerList.appendChild(div);
+                } else {
+                    scoreSpan.textContent = players[id].score;
+                }
+            }
+        }
+
+        function updateLeaderboard(serverPlayers) {
+            const sortedPlayers = Object.entries(serverPlayers)
+                .sort((a, b) => b[1].score - a[1].score);
+            leaderboard.innerHTML = '<h3>排行榜</h3>' + sortedPlayers
+                .map(([id, player]) => `${player.nickname}: ${player.score}分`)
+                .join('<br>');
+        }
+
+        function startCharging() {
+            isCharging = true;
+            chargePower();
+        }
+
+        function chargePower() {
+            if (isCharging && power < 100) {
+                power += 2;
+                powerLevel.style.width = `${power}%`;
+                requestAnimationFrame(chargePower);
+            }
+        }
+
+        function releaseJump(id) {
+            if (!isCharging || id !== myId) return;
+            isCharging = false;
+
+            const jumpDistance = power * 5;
+            socket.send(JSON.stringify({
+                type: 'jump',
+                id: myId,
+                distance: jumpDistance
+            }));
+
+            power = 0;
+            powerLevel.style.width = '0%';
+        }
+
+        // 回车键加入游戏
+        nicknameInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') joinGame();
+        });
+    </script>
+</body>
+</html>
