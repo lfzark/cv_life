@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CV人生规划 - 在线多人版</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; background-color: #f5f5f5; }
+        #game-area { margin: 20px; }
+        .player { border: 1px solid #ccc; padding: 10px; margin: 5px; display: inline-block; background-color: #fff; position: relative; }
+        #dice-result { font-size: 24px; margin: 10px; color: #333; min-height: 30px; }
+        #cards { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
+        .card { 
+            border: 1px solid #000; padding: 10px; width: 200px; background-color: #e0e0e0; 
+            position: relative; transition: transform 0.5s ease, opacity 0.5s ease; 
+        }
+        .card.can-buy { cursor: pointer; }
+        .card.can-buy:hover { background-color: #d0d0d0; }
+        .card.cannot-buy { opacity: 0.5; }
+        .card-tooltip::after { 
+            content: attr(data-tooltip); 
+            display: none; position: absolute; top: -50px; left: 50%; transform: translateX(-50%); 
+            background: rgba(0, 0, 0, 0.8); color: white; padding: 5px; border-radius: 3px; 
+            font-size: 12px; white-space: nowrap; z-index: 10; 
+        }
+        .card-tooltip:hover::after { display: block; }
+        #status { margin: 10px; font-weight: bold; color: #007bff; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; margin: 5px; }
+        button:disabled { cursor: not-allowed; opacity: 0.5; }
+        #name-input { display: block; margin: 10px auto; padding: 5px; }
+        #timer { font-size: 18px; color: #ff4500; }
+        .fly-in { animation: flyIn 0.5s ease forwards; }
+        @keyframes flyIn {
+            from { transform: translateY(100px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <h1>CV人生规划 - 在线多人版</h1>
+    <div id="name-prompt">
+        <input type="text" id="name-input" placeholder="输入你的昵称（留空随机）">
+        <button id="submit-name">确定</button>
+    </div>
+    <div id="game-area" style="display: none;">
+        <div id="status"></div>
+        <div id="timer"></div>
+        <button id="ready">准备</button>
+        <button id="roll-dice" disabled>掷骰子</button>
+        <button id="skip" disabled>跳过</button>
+        <div id="dice-result"></div>
+        <h2>当前阶段：<span id="stage"></span></h2>
+        <h2>可用卡牌</h2>
+        <div id="cards"></div>
+        <h2>玩家状态</h2>
+        <div id="players"></div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io('http://localhost:3000');
+        const resources = ['❤️', '📖', '👥', '💼', '💰', '🍀'];
+        let myId, timerInterval;
+
+        socket.on('connect', () => {
+            myId = socket.id;
+            console.log('我的ID:', myId);
+        });
+
+        socket.on('nameError', (msg) => {
+            alert(msg);
+            document.getElementById('name-input').value = '';
+        });
+
+        socket.on('nameSet', (name) => {
+            document.getElementById('name-prompt').style.display = 'none';
+            document.getElementById('game-area').style.display = 'block';
+        });
+
+        socket.on('error', (msg) => {
+            alert(msg);
+        });
+
+        socket.on('start', (data) => {
+            updateUI(data);
+            document.getElementById('ready').disabled = true;
+            document.getElementById('roll-dice').disabled = false;
+        });
+
+        socket.on('diceResult', (data) => {
+            console.log('收到骰子结果:', data); // 调试日志
+            const resultDiv = document.getElementById('dice-result');
+            if (!resultDiv) {
+                console.error('未找到 #dice-result 元素');
+                return;
+            }
+            resultDiv.innerHTML = '掷骰中...';
+            let count = 0;
+            const rollInterval = setInterval(() => {
+                resultDiv.innerHTML = `掷骰中... ${Array(4).fill().map(() => resources[Math.floor(Math.random() * 6)]).join(', ')}`;
+                count++;
+                console.log(`滚动动画第 ${count} 次`); // 调试日志
+                if (count >= 10) {
+                    clearInterval(rollInterval);
+                    resultDiv.innerHTML = `玩家 ${data.player} 掷骰结果: ${data.dice.join(', ')}`;
+                    startTimer();
+                }
+            }, 100);
+        });
+
+        socket.on('update', (data) => updateUI(data));
+
+        socket.on('gameOver', (players) => {
+            const winner = Object.entries(players).reduce((a, b) => a[1].score > b[1].score ? a : b)[0];
+            document.getElementById('status').innerHTML = `游戏结束！玩家 ${players[winner].name} 获胜，得分: ${players[winner].score}`;
+            document.getElementById('roll-dice').disabled = true;
+            document.getElementById('skip').disabled = true;
+            clearInterval(timerInterval);
+            document.getElementById('timer').innerHTML = '';
+        });
+
+        document.getElementById('submit-name').onclick = () => {
+            const name = document.getElementById('name-input').value || '';
+            socket.emit('setName', name);
+        };
+
+        document.getElementById('ready').onclick = () => {
+            socket.emit('ready');
+        };
+
+        document.getElementById('roll-dice').onclick = () => {
+            socket.emit('rollDice');
+        };
+
+        document.getElementById('skip').onclick = () => {
+            socket.emit('skip');
+            clearInterval(timerInterval);
+            document.getElementById('timer').innerHTML = '';
+        };
+
+        function canBuyCard(playerResources, cardCost) {
+            return cardCost.every(r => playerResources[r] > 0);
+        }
+
+        function startTimer() {
+            clearInterval(timerInterval);
+            let timeLeft = 30;
+            document.getElementById('timer').innerHTML = `剩余时间: ${timeLeft}s`;
+            timerInterval = setInterval(() => {
+                timeLeft--;
+                document.getElementById('timer').innerHTML = `剩余时间: ${timeLeft}s`;
+                if (timeLeft <= 0) {
+                    clearInterval(timerInterval);
+                    socket.emit('skip');
+                    document.getElementById('timer').innerHTML = '';
+                }
+            }, 1000);
+        }
+
+        function updateUI(data) {
+            const playersDiv = document.getElementById('players');
+            playersDiv.innerHTML = '';
+            for (let id in data.players) {
+                const p = data.players[id];
+                const div = document.createElement('div');
+                div.className = 'player';
+                div.innerHTML = `玩家 ${p.name} ${p.isAI ? '(AI)' : ''}: 分数 ${p.score}<br>资源: ${Object.entries(p.resources).map(([k, v]) => `${k}:${v}`).join(', ')}<br>卡牌: ${p.cards.map(c => c.name).join(', ')}<br>状态: ${p.ready ? '已准备' : '未准备'}`;
+                playersDiv.appendChild(div);
+            }
+            document.getElementById('stage').innerHTML = data.stage || '等待开始';
+            const cardsDiv = document.getElementById('cards');
+            cardsDiv.innerHTML = '';
+            const isMyTurn = data.gameStarted && myId === Object.keys(data.players)[data.currentPlayer];
+            const myResources = data.players[myId]?.resources || {};
+            data.cards.forEach((card, index) => {
+                const div = document.createElement('div');
+                div.className = 'card card-tooltip';
+                div.setAttribute('data-tooltip', card.effect ? `效果: ${card.effect === 'gain_resource' ? '随机获得1资源' : '偷取1工作资源'}` : '无特殊效果');
+                div.innerHTML = `${card.name} (成本: ${card.cost.join(', ')})<br>得分: ${card.score}<br>${card.desc}`;
+                if (isMyTurn) {
+                    if (canBuyCard(myResources, card.cost)) {
+                        div.classList.add('can-buy');
+                        div.onclick = () => {
+                            socket.emit('buyCard', index);
+                            animateCardFly(div, document.querySelector(`.player:nth-child(${Object.keys(data.players).indexOf(myId) + 1})`));
+                            clearInterval(timerInterval);
+                            document.getElementById('timer').innerHTML = '';
+                        };
+                    } else {
+                        div.classList.add('cannot-buy');
+                    }
+                }
+                cardsDiv.appendChild(div);
+            });
+            document.getElementById('status').innerHTML = data.gameStarted 
+                ? `当前轮到玩家 ${data.players[Object.keys(data.players)[data.currentPlayer]].name}`
+                : `等待所有玩家准备 (${Object.values(data.players).filter(p => p.ready).length}/${Object.values(data.players).filter(p => !p.isAI).length})`;
+            document.getElementById('roll-dice').disabled = !data.gameStarted || myId !== Object.keys(data.players)[data.currentPlayer];
+            document.getElementById('skip').disabled = !data.gameStarted || myId !== Object.keys(data.players)[data.currentPlayer];
+            document.getElementById('ready').disabled = data.gameStarted || data.players[myId]?.ready;
+
+            if (isMyTurn && document.getElementById('dice-result').innerHTML !== '' && !timerInterval) {
+                startTimer();
+            }
+        }
+
+        function animateCardFly(cardElement, targetElement) {
+            const clone = cardElement.cloneNode(true);
+            clone.style.position = 'absolute';
+            clone.style.left = `${cardElement.getBoundingClientRect().left}px`;
+            clone.style.top = `${cardElement.getBoundingClientRect().top}px`;
+            document.body.appendChild(clone);
+
+            const targetRect = targetElement.getBoundingClientRect();
+            clone.style.transform = `translate(${targetRect.left - clone.getBoundingClientRect().left}px, ${targetRect.top - clone.getBoundingClientRect().top}px) scale(0.5)`;
+            clone.style.opacity = '0';
+            setTimeout(() => clone.remove(), 500);
+        }
+    </script>
+</body>
+</html>
