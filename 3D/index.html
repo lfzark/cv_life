@@ -62,16 +62,17 @@
             const loader = new THREE.FBXLoader();
             loader.load('human_old.fbx', (fbx) => {
                 humanModel = fbx;
-                humanModel.scale.set(0.01, 0.01, 0.01); // 调整缩放
+                const modelScale = 0.01; // 模型基础缩放
+                humanModel.scale.set(modelScale, modelScale, modelScale);
                 humanModel.position.set(0, 0, 0);
 
                 // 设置透明材质
                 humanModel.traverse((child) => {
                     if (child.isMesh) {
                         child.material.transparent = true;
-                        child.material.opacity = 0.3; // 透明度（0-1，0为完全透明）
-                        child.material.color.set(0xaaaaaa); // 可选：调整颜色
-                        child.material.side = THREE.DoubleSide; // 双面渲染
+                        child.material.opacity = 0.3;
+                        child.material.color.set(0xaaaaaa);
+                        child.material.side = THREE.DoubleSide;
                     }
                 });
 
@@ -85,15 +86,22 @@
                 const depth = box.max.z - box.min.z;
                 console.log('模型尺寸 - 宽度:', width, '高度:', height, '深度:', depth);
 
-                createAcupoints(height, width, depth);
-                createMeridians(height, width, depth);
+                // 调整穴位和经络的比例因子
+                const scaleFactor = height / 2; // 以高度为基准
+                createAcupoints(height, width, depth, scaleFactor, modelScale);
+                createMeridians(height, width, depth, scaleFactor, modelScale);
+
+                // 调整相机位置
+                camera.position.set(0, height / 2, height * 2);
+                camera.lookAt(0, height / 2, 0);
+                controls.target.set(0, height / 2, 0);
             }, undefined, (error) => {
                 console.error('模型加载失败:', error);
             });
         }
 
-        // 创建361个穴位（根据模型尺寸调整）
-        function createAcupoints(height, width, depth) {
+        // 创建361个穴位（动态比例）
+        function createAcupoints(height, width, depth, scaleFactor, modelScale) {
             const acupointMaterial = new THREE.SpriteMaterial({
                 color: 0xffff00,
                 map: createGlowTexture(),
@@ -104,15 +112,15 @@
             for (let i = 0; i < 361; i++) {
                 const theta = Math.random() * Math.PI * 2;
                 const phi = Math.acos(2 * Math.random() - 1);
-                const radius = width / 2 + 0.01;
+                const radius = (width / 2) / modelScale + 0.1; // 考虑模型缩放
                 const x = radius * Math.sin(phi) * Math.cos(theta);
-                const y = (height / 2) * (2 * Math.random() - 1);
+                const y = (height / modelScale) * (Math.random() - 0.5); // 在模型高度范围内
                 const z = radius * Math.sin(phi) * Math.sin(theta);
 
                 const sprite = new THREE.Sprite(acupointMaterial);
                 sprite.position.set(x, y, z);
-                sprite.scale.set(0.05, 0.05, 0.05); // 可根据模型大小调整
-                humanModel.add(sprite);
+                sprite.scale.set(1 * scaleFactor, 1 * scaleFactor, 1 * scaleFactor); // 显著增大
+                scene.add(sprite); // 添加到场景而非模型
             }
         }
 
@@ -132,8 +140,8 @@
             return texture;
         }
 
-        // 创建12条经络（根据模型尺寸调整）
-        function createMeridians(height, width, depth) {
+        // 创建12条经络（动态比例）
+        function createMeridians(height, width, depth, scaleFactor, modelScale) {
             const meridianColors = [
                 0xff0000, 0x00ff00, 0x0000ff, 0xffff00, 0xff00ff, 0x00ffff,
                 0xff8000, 0x8000ff, 0x0080ff, 0xff0080, 0x80ff00, 0x00ff80
@@ -144,14 +152,18 @@
                 const segments = 20;
                 for (let j = 0; j <= segments; j++) {
                     const t = j / segments;
-                    const x = (width / 2) * Math.cos(i * Math.PI / 6 + t * Math.PI * 2) * (1 - t);
-                    const y = t * height - height / 2;
-                    const z = (depth / 2) * Math.sin(i * Math.PI / 6 + t * Math.PI * 2) * (1 - t);
+                    const x = (width / 2) / modelScale * Math.cos(i * Math.PI / 6 + t * Math.PI * 2) * (1 - t);
+                    const y = (t * height - height / 2) / modelScale;
+                    const z = (depth / 2) / modelScale * Math.sin(i * Math.PI / 6 + t * Math.PI * 2) * (1 - t);
                     points.push(new THREE.Vector3(x, y, z));
                 }
 
                 const geometry = new THREE.TubeGeometry(
-                    new THREE.CatmullRomCurve3(points), segments, 0.02, 8, false
+                    new THREE.CatmullRomCurve3(points), 
+                    segments, 
+                    0.5 * scaleFactor, // 显著增大半径
+                    8, 
+                    false
                 );
                 const material = new THREE.ShaderMaterial({
                     uniforms: {
@@ -179,7 +191,7 @@
                 });
 
                 const meridian = new THREE.Mesh(geometry, material);
-                humanModel.add(meridian);
+                scene.add(meridian); // 添加到场景而非模型
             }
         }
 
@@ -188,13 +200,11 @@
             requestAnimationFrame(animate);
             const time = clock.getElapsedTime();
 
-            if (humanModel) {
-                humanModel.traverse((object) => {
-                    if (object.material && object.material.uniforms && object.material.uniforms.time) {
-                        object.material.uniforms.time.value = time;
-                    }
-                });
-            }
+            scene.traverse((object) => {
+                if (object.material && object.material.uniforms && object.material.uniforms.time) {
+                    object.material.uniforms.time.value = time;
+                }
+            });
 
             controls.update();
             renderer.render(scene, camera);
